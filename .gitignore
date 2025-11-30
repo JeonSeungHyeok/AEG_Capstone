@@ -3,3 +3,4 @@
 /test_honggfuzz/
 /temporary/
 /instructions/
+**/__pycache__/

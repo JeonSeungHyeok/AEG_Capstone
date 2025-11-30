@@ -1,37 +1,35 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
 import os
+import sys
 import glob
 import textwrap
 import re
 from openai import OpenAI
 
-# 설정
 BASE_DIR = os.path.expanduser("~/projects/aixcc-mvp")
 CHALLENGE_DIR = os.path.join(BASE_DIR, "challenge")
 HARNESS_DIR = os.path.join(BASE_DIR, "harness")
-TOOLS_DIR = os.path.join(BASE_DIR, "tools")
 
 MODEL_NAME = "gpt-4o"
-MAX_CHARS_TO_SEND = 100000
 MAX_TOKENS = 2500
 TEMPERATURE = 0.0
 
-# 유틸
-def read_source(path, max_chars=MAX_CHARS_TO_SEND):
-    with open(path, "r", errors="replace") as f:
-        txt = f.read()
-    if len(txt) <= max_chars:
-        return txt
+def check_api_key():
+    if not os.getenv("OPENAI_API_KEY"):
+        print("[ERROR] OPENAI_API_KEY environment variable is not set.")
+        print("Please run: export OPENAI_API_KEY='sk-...'")
+        sys.exit(1)
 
-    head = txt[: max_chars // 2]
-    tail = txt[- (max_chars // 2) :]
-    return head + "\n/* ...TRUNCATED... (middle omitted) */\n" + tail
+def read_source(path):
+    try:
+        with open(path, "r", errors="replace", encoding="utf-8") as f:
+            return f.read()
+    except Exception as e:
+        print(f"[WARN] Could not read file {path}: {e}")
+        return None
 
 def sanitize_response(resp_text: str) -> str:
     if not resp_text:
-        return resp_text
+        return ""
 
     code_block_pattern = re.compile(r"```(?:c|C|cpp|)\s*([\s\S]*?)```", re.IGNORECASE)
     m = code_block_pattern.search(resp_text)
@@ -42,8 +40,10 @@ def sanitize_response(resp_text: str) -> str:
         idx = resp_text.find("#include")
         if idx == -1:
             idx = resp_text.find("int LLVMFuzzerTestOneInput")
-        return resp_text[idx:].strip()
-
+        
+        if idx != -1:
+            return resp_text[idx:].strip()
+        
     return resp_text.strip()
 
 def build_system_prompt():
@@ -55,7 +55,6 @@ def build_system_prompt():
 def build_user_prompt(filename, source_text):
     name = os.path.basename(filename)
     
-    # [수정됨] read와 scanf를 모두 후킹하는 고성능 하네스 예시
     harness_template = textwrap.dedent("""
     // [TEMPLATE - SKELETON CODE]
     // clang -o harness harness.c -fsanitize=fuzzer,address -g
@@ -129,7 +128,7 @@ def build_user_prompt(filename, source_text):
     }
     """)
     
-    s = textwrap.dedent(f"""
+    return textwrap.dedent(f"""
     Role: Expert Fuzzing Engineer.
     
     Task: Create a **SINGLE, SELF-CONTAINED, HIGH-PERFORMANCE** libFuzzer harness for {name}.
@@ -164,15 +163,15 @@ def build_user_prompt(filename, source_text):
     {harness_template}
     ==================================================
 
-    [TARGET SOURCE CODE]
+    [TARGET SOURCE CODE (FULL)]
     {source_text}
     
     Output ONLY the C source code.
     """)
-    return s
 
-def call_llm_and_get_code(system_msg, user_msg):
-    client = OpenAI()
+
+def generate_harness(client, system_msg, user_msg, filename, target_code):
+    print(f"  > Generating harness for '{filename}'...")
     try:
         resp = client.chat.completions.create(
             model=MODEL_NAME,
@@ -184,14 +183,32 @@ def call_llm_and_get_code(system_msg, user_msg):
             temperature=TEMPERATURE,
         )
         content = resp.choices[0].message.content
-        return sanitize_response(content)
-    except Exception as e:
-        print(f"[API ERROR] {e}")
-        return ""
+        code = sanitize_response(content)
+        
+        if not code:
+            print(f"  [WARN] Generated code is empty for {filename}")
+            return
+        
+        out_fname = os.path.join(HARNESS_DIR, f"create_fuzz_{filename}.c")
+        with open(out_fname, "w", encoding="utf-8") as f:
+            f.write(code)
+            
+        print(f"  [OK] Saved harness: {out_fname}")
 
-# 메인 작업
+        if "LLVMFuzzerTestOneInput" not in code:
+            print(f"  [WARN] {filename}: Missing 'LLVMFuzzerTestOneInput' entry point.")
+        if "#define read" not in code and "read(" in target_code:
+            print(f"  [CHECK] {filename}: Source uses read(), verify if hooking is applied.")
+
+    except Exception as e:
+        print(f"  [ERROR] Harness generation failed for {filename}: {e}")
+
 def main():
+    check_api_key()
+    
     os.makedirs(HARNESS_DIR, exist_ok=True)
+    
+    client = OpenAI()
 
     c_files = sorted(glob.glob(os.path.join(CHALLENGE_DIR, "*.c")))
     if not c_files:
@@ -211,23 +228,9 @@ def main():
         
         user_msg = build_user_prompt(path, src)
         
-        code = call_llm_and_get_code(system_msg, user_msg)
-        if not code:
-            print(f"[WARN] Empty code returned for {basename}")
-            continue
+        generate_harness(client=client, system_msg=system_msg, user_msg=user_msg, filename=basename, target_code=src)
 
-        out_fname = os.path.join(HARNESS_DIR, f"create_fuzz_{basename}.c")
-        with open(out_fname, "w", encoding="utf-8") as f:
-            f.write(code)
-        print(f"[OK] Wrote harness: {out_fname}")
-
-        # 기본 검사
-        if "LLVMFuzzerTestOneInput" not in code:
-            print(f"[WARN] {basename}: Harness might be invalid (missing entry point).")
-        if "#define read" not in code and "read(" in src:
-             print(f"[CHECK] {basename}: Source uses read(), ensure it's hooked for speed.")
-
-    print("[DONE] All files processed.")
+    print("\n[INFO] All harness generation completed.")
 
 if __name__ == "__main__":
     main()

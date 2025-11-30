@@ -22,7 +22,7 @@ for file in challenge/*; do
 
     # 1. Create Libfuzzer harness on LLM
     echo "[*] Running LLM Generator..."
-    python tools/create_fuzz_via_llm.py "$target"
+    python tools/create_fuzz_harness.py "$target"
 
     if [ $? -ne 0 ]; then
         echo "[!] Error: Python script failed for $target"
