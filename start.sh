@@ -93,7 +93,7 @@ for file_path in "$INITIAL_DIR"/*.c; do
     echo "[*] Archiving results to $BACKUP_DIR/$target..."
 
     TARGET_BACKUP="$BACKUP_DIR/$target"
-    mkdir -p "$TARGET_BACKUP/{harness,fuzz,output,seeds}"
+    mkdir -p "$TARGET_BACKUP"/{harness,fuzz,output,seeds}
 
     safe_mv "$CHALLENGE_DIR/$filename" "$TARGET_BACKUP/"
     safe_mv "$harness"                 "$TARGET_BACKUP/harness/"
