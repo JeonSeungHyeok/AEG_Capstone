@@ -72,14 +72,14 @@ for file_path in "$INITIAL_DIR"/*.c; do
     # 2. Compile clang
     if [ -f "$harness" ]; then
         echo "[*] Compiling with Clang..."
-        clang -o "$fuzz" "$harness" -fsanitize=fuzzer,address -g -m32
+        clang -o "$fuzz" "$harness" -fsanitize=fuzzer,address,undefined -g -m32
 
         # 3. Execute fuzzer
         if [ -f "$fuzz" ]; then
             echo "[*] Running Fuzzer (Timeout: 90s)..."
             ./"$fuzz" "$SEED_CORPUS" "$SEED_BASIC" \
                 -artifact_prefix="$SEED_CRASH/${target}_" \
-                -max_total_time=90 \
+                -max_total_time=90 -fork=3 \
                 > "$log_file" 2>&1
         
             echo "[+] Fuzzing finished for $target."
