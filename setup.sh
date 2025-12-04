@@ -2,7 +2,7 @@
 
 echo "[*] 시스템 패키지 업데이트 및 설치 중..."
 sudo apt-get update
-sudo apt-get install -y build-essential clang llvm g++-multilib libc6-dev-i386 python3-pip python3-venv git gcc-multilib g++ 
+sudo apt-get install -y build-essential clang llvm g++-multilib libc6-dev-i386 python3-pip python3-venv gcc-multilib g++ 
 
 echo "[*] Python 가상환경(venv) 생성 중..."
 if [ ! -d "venv" ]; then
