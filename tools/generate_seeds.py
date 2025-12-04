@@ -4,7 +4,7 @@ import glob
 import codecs
 from openai import OpenAI
 
-BASE_DIR = os.path.expanduser("~/projects/aixcc-mvp")
+BASE_DIR = os.getcwd()
 CHALLENGE_DIR = os.path.join(BASE_DIR, "challenge")
 SEED_DIR = os.path.join(BASE_DIR, "seeds/basic_seed")
 

@@ -1,12 +1,5 @@
 #!/bin/bash
 
-# Check root directory location
-PROJECT_DIR=~/projects/aixcc-mvp
-if [ "$(pwd)" != "$PROJECT_DIR" ]; then
-    echo "Warning: The current directory is not $PROJECT_DIR"
-    exit
-fi
-
 INITIAL_DIR="initial_files"
 CHALLENGE_DIR="challenge"
 BACKUP_DIR="backup_files"
@@ -56,8 +49,8 @@ for file_path in "$INITIAL_DIR"/*.c; do
     # 1. Create Seed Generator and Libfuzzer harness on LLM
     echo "[*] Running LLM Generator..."
     rm -rf "$SEED_BASIC"/*
-    python tools/generate_seeds.py
-    python tools/create_fuzz_harness.py
+    python3 tools/generate_seeds.py
+    python3 tools/create_fuzz_harness.py
     
     if [ $? -ne 0 ]; then
         echo "[!] Error: Python script failed for $target"
@@ -65,8 +58,8 @@ for file_path in "$INITIAL_DIR"/*.c; do
         continue
     fi
 
-    harness="$HARNESS_DIR/create_fuzz_${filename}"
-    fuzz="$FUZZ_DIR/harness_$target"
+    harness="$HARNESS_DIR/harness_${filename}"
+    fuzz="$FUZZ_DIR/fuzz_$target"
     log_file="$OUTPUT_DIR/${target}.txt"
 
     # 2. Compile clang
