@@ -5,13 +5,30 @@ import textwrap
 import re
 from openai import OpenAI
 
-BASE_DIR = os.path.expanduser("~/projects/aixcc-mvp")
+BASE_DIR = os.getcwd()
 CHALLENGE_DIR = os.path.join(BASE_DIR, "challenge")
 HARNESS_DIR = os.path.join(BASE_DIR, "harness")
 
 MODEL_NAME = "gpt-4o"
 MAX_TOKENS = 2500
 TEMPERATURE = 0.0
+
+FIXED_HEADER ="""// clang -o harness harness.c -fsanitize=fuzzer,address -g
+#include <stdint.h>
+#include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <stdarg.h>
+
+// 1. Remove unnecessary output to improve purging speed
+#define printf(...) ((void)0)
+#define puts(s) ((void)0)
+#define fprintf(stream, ...) ((void)0)
+
+// 2. Prevent shell execution (safety device)
+#define system(x) ((void)0)
+"""
 
 def check_api_key():
     if not os.getenv("OPENAI_API_KEY"):
@@ -31,144 +48,67 @@ def sanitize_response(resp_text: str) -> str:
     if not resp_text:
         return ""
 
-    code_block_pattern = re.compile(r"```(?:c|C|cpp|)\s*([\s\S]*?)```", re.IGNORECASE)
-    m = code_block_pattern.search(resp_text)
+    m = re.search(r"```[\w]*\n([\s\S]*?)```", resp_text)
     if m:
         return m.group(1).strip()
+    
+    idx = re.search(r"(#include|void\s+\w+|int\s+LLVMFuzzerTestOneInput)", resp_text)
+    if idx:
+        return resp_text[idx.start():].strip()
 
-    if "LLVMFuzzerTestOneInput" in resp_text:
-        idx = resp_text.find("#include")
-        if idx == -1:
-            idx = resp_text.find("int LLVMFuzzerTestOneInput")
-        
-        if idx != -1:
-            return resp_text[idx:].strip()
-        
     return resp_text.strip()
 
 def build_system_prompt():
-    return (
-        "You are an expert Security Engineer specializing in Fuzzing. "
-        "Your goal is to generate a robust, secure, and compilable libFuzzer harness."
-    )
+    return textwrap.dedent("""
+        You are an expert Security Engineer specializing in Fuzzing with libFuzzer.
+        
+        YOUR GOAL: 
+        Create a harness that tests the vulnerable function DIRECTLY, while preserving the ORIGINAL LINE NUMBERS for debugging.
+        
+        INSTRUCTIONS:
+        1. Look at the provided "Target Source Code" which has line numbers (e.g., "12 | void func()").
+        2. Identify the vulnerable function (e.g., strcpy, memcpy, buffer overflow candidates).
+        3. Extract that function and its dependencies.
+        4. **CRITICAL:** Before pasting the extracted function, insert a `#line` directive matching its start line in the original file.
+           Format: `#line <original_line_number> "<original_filename>"`
+        5. Implement `LLVMFuzzerTestOneInput` to call this function directly.
+        
+        EXAMPLE:
+        If the source is:
+           20 | void vuln(char *s) {
+           21 |    char buf[10];
+           22 |    strcpy(buf, s);
+           23 | }
+        
+        Your output must be:
+           #include ...
+           
+           #line 20 "CWE_example.c"
+           void vuln(char *s) {
+               char buf[10];
+               strcpy(buf, s);
+           }
+           
+           int LLVMFuzzerTestOneInput(...) { ... }
+    """)
 
 def build_user_prompt(filename, source_text):
     name = os.path.basename(filename)
     
-    harness_template = textwrap.dedent("""
-    // [TEMPLATE - SKELETON CODE]
-    // clang -o harness harness.c -fsanitize=fuzzer,address -g
-    #include <stdint.h>
-    #include <string.h>
-    #include <stdio.h>
-    #include <unistd.h>
-    #include <stdlib.h>
-    #include <stdarg.h>
-    
-    // [SAFETY] Neutralize dangerous functions
-    #define system(x) ((void)0)
-    #define printf(...) ((void)0)
-    
-    // ------------------------------------------------------------------
-    // [SPEED OPTIMIZATION INFRASTRUCTURE]
-    // Global variables to hold fuzzer data
-    // ------------------------------------------------------------------
-    const uint8_t *g_data;
-    size_t g_size;
-    size_t g_pos;
-    
-    // Custom read implementation (Memory copy instead of system call)
-    ssize_t my_read(int fd, void *buf, size_t count) {
-        if (fd != 0) return 0; // Only mock stdin
-        if (g_pos >= g_size) return 0;
-        size_t remain = g_size - g_pos;
-        size_t len = (count < remain) ? count : remain;
-        memcpy(buf, g_data + g_pos, len);
-        g_pos += len;
-        return len;
-    }
-
-    // Custom scanf implementation (Inject bytes directly from fuzzer data)
-    int my_scanf(const char *format, ...) {
-        va_list args;
-        va_start(args, format);
-        // Basic logic: if format expects integers, copy bytes from g_data
-        if (strstr(format, "d") || strstr(format, "u") || strstr(format, "x")) {
-             int *ptr = va_arg(args, int *);
-             if (g_pos + sizeof(int) <= g_size) {
-                 memcpy(ptr, g_data + g_pos, sizeof(int));
-                 g_pos += sizeof(int);
-             }
-        }
-        va_end(args);
-        return 1;
-    }
-    
-    // [HOOKING] Redirect slow I/O to fast in-memory functions
-    #define read my_read
-    #define scanf my_scanf
-    
-    // [DEPENDENCY]
-    // !!! PASTE THE FULL TARGET FUNCTION HERE !!!
-    // IF TARGET IS 'main', RENAME it to 'target_main' (int target_main(...))
-    
-    // [HARNESS]
-    int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
-        // 1. Initialize Global State
-        g_data = data;
-        g_size = size;
-        g_pos = 0;
-        
-        // 2. Call Target (Implement logic based on source analysis)
-        // Case A: target_main(argc, fake_argv)
-        // Case B: func(buf)
-        // Case C: func() (stdin used via hooks)
-        
-        return 0;
-    }
-    """)
+    lines = source_text.split('\n')
+    numbered_source = "\n".join([f"{i+1} | {line}" for i, line in enumerate(lines)])
     
     return textwrap.dedent(f"""
-    Role: Expert Fuzzing Engineer.
-    
-    Task: Create a **SINGLE, SELF-CONTAINED, HIGH-PERFORMANCE** libFuzzer harness for {name}.
-    
-    ==================================================
-    [INSTRUCTION: USE THE TEMPLATE]
-    1. Adopt the **Speed Optimization Infrastructure** (`my_read`, `my_scanf`, `g_data`) from the template below EXACTLY.
-    2. **DO NOT HALLUCINATE LOGIC.** Do not invent variables or functions (like `snprintf`) unless they exist in the actual target source.
-    3. Analyze the [TARGET SOURCE CODE] and fill in the `[DEPENDENCY]` and `[HARNESS]` sections of the template accordingly.
-    ==================================================
-
-    [STEP 1: ANALYZE TARGET FUNCTION STRATEGY]
-    
-    **Case A: Target is `int main(int argc, char *argv[])`**
-    - **CRITICAL:** You MUST rename `main` to `target_main` to avoid conflict with LibFuzzer's main.
-    - Inside `LLVMFuzzerTestOneInput`:
-        1. Allocate a buffer using `malloc(size + 1)` and copy `data`.
-        2. Create a `fake_argv` array: `{{ "program", buffer, NULL }}`.
-        3. Call `target_main(2, fake_argv)`.
-        4. Free the buffer.
-
-    **Case B: Target uses Standard Input (`read(0)`, `scanf`)**
-    - Copy the function code as is.
-    - Ensure `#define read my_read` and `#define scanf my_scanf` are active.
-    - Inside `LLVMFuzzerTestOneInput`: Just call the target function.
-
-    **Case C: Target takes buffer arguments (`void func(char *input)`)**
-    - Inside `LLVMFuzzerTestOneInput`: Allocate a buffer, copy `data`, Null-terminate, and pass it to `func`.
-
-    ==================================================
-    [REFERENCE: HARNESS TEMPLATE]
-    {harness_template}
-    ==================================================
-
-    [TARGET SOURCE CODE (FULL)]
-    {source_text}
-    
-    Output ONLY the C source code.
+        Target Filename: `{name}`
+        
+        [TARGET SOURCE CODE WITH LINE NUMBERS]
+        {numbered_source}
+        
+        Request:
+        1. Extract the vulnerable function.
+        2. Prepend `#line <start_line> "{name}"` exactly above the function definition.
+        3. Write `LLVMFuzzerTestOneInput` to call it directly.
     """)
-
 
 def generate_harness(client, system_msg, user_msg, filename, target_code):
     print(f"  > Generating harness for '{filename}'...")
@@ -189,16 +129,19 @@ def generate_harness(client, system_msg, user_msg, filename, target_code):
             print(f"  [WARN] Generated code is empty for {filename}")
             return
         
-        out_fname = os.path.join(HARNESS_DIR, f"create_fuzz_{filename}.c")
+        out_fname = os.path.join(HARNESS_DIR, f"harness_{filename}.c")
+        
         with open(out_fname, "w", encoding="utf-8") as f:
+            f.write(FIXED_HEADER)
+            f.write("\n// [INFO] LLM output below. It should contain #line directives.\n")
             f.write(code)
             
         print(f"  [OK] Saved harness: {out_fname}")
 
         if "LLVMFuzzerTestOneInput" not in code:
             print(f"  [WARN] {filename}: Missing 'LLVMFuzzerTestOneInput' entry point.")
-        if "#define read" not in code and "read(" in target_code:
-            print(f"  [CHECK] {filename}: Source uses read(), verify if hooking is applied.")
+        if "#line" not in code:
+            print(f"  [WARN] {filename}: LLM did not generate #line directives.")
 
     except Exception as e:
         print(f"  [ERROR] Harness generation failed for {filename}: {e}")
