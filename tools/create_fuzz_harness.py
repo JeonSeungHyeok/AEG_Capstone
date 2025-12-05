@@ -60,36 +60,28 @@ def sanitize_response(resp_text: str) -> str:
 
 def build_system_prompt():
     return textwrap.dedent("""
-        You are an expert Security Engineer specializing in Fuzzing with libFuzzer.
-        
-        YOUR GOAL: 
-        Create a harness that tests the vulnerable function DIRECTLY, while preserving the ORIGINAL LINE NUMBERS for debugging.
+        You are an expert Security Engineer for libFuzzer. 
+        Task: Create a harness testing the vulnerable function DIRECTLY.
         
         INSTRUCTIONS:
-        1. Look at the provided "Target Source Code" which has line numbers (e.g., "12 | void func()").
-        2. Identify the vulnerable function (e.g., strcpy, memcpy, buffer overflow candidates).
-        3. Extract that function and its dependencies.
-        4. **CRITICAL:** Before pasting the extracted function, insert a `#line` directive matching its start line in the original file.
-           Format: `#line <original_line_number> "<original_filename>"`
-        5. Implement `LLVMFuzzerTestOneInput` to call this function directly.
+        1. Analyze 'Target Source Code' (w/ line numbers).
+        2. Extract ONLY the vulnerable function (e.g., strcpy, buffer overflow) and dependencies.
+        3. **CRITICAL**: Prepend `#line <orig_line> \"<orig_filename>\"` to the extracted function.
+        5. Implement `LLVMFuzzerTestOneInput` to call it.
         
         EXAMPLE:
-        If the source is:
-           20 | void vuln(char *s) {
-           21 |    char buf[10];
-           22 |    strcpy(buf, s);
-           23 | }
+        [INPUT]
+        20 | void vuln(char *s) {
+        21 |    strcpy(buf, s);
+        22 | }
         
-        Your output must be:
-           #include ...
-           
-           #line 20 "CWE_example.c"
-           void vuln(char *s) {
-               char buf[10];
-               strcpy(buf, s);
-           }
-           
-           int LLVMFuzzerTestOneInput(...) { ... }
+        [OUTPUT]:
+        #include ...
+        #line 20 "CWE_example.c"
+        void vuln(char *s) {
+            strcpy(buf, s);
+        }
+        int LLVMFuzzerTestOneInput(...) { ... }
     """)
 
 def build_user_prompt(filename, source_text):
@@ -97,20 +89,17 @@ def build_user_prompt(filename, source_text):
     
     lines = source_text.split('\n')
     numbered_source = "\n".join([f"{i+1} | {line}" for i, line in enumerate(lines)])
-    
     return textwrap.dedent(f"""
         Target Filename: `{name}`
-        
-        [TARGET SOURCE CODE WITH LINE NUMBERS]
+        SOURCE CODE:
         {numbered_source}
         
         Request:
-        1. Extract the vulnerable function.
-        2. Prepend `#line <start_line> "{name}"` exactly above the function definition.
-        3. Write `LLVMFuzzerTestOneInput` to call it directly.
+        1. Extract vulnerable function prefixed with `#line <line> "{name}"`.
+        3. Write `LLVMFuzzerTestOneInput`.
     """)
 
-def generate_harness(client, system_msg, user_msg, filename, target_code):
+def generate_harness(client, system_msg, user_msg, filename):
     print(f"  > Generating harness for '{filename}'...")
     try:
         resp = client.chat.completions.create(
@@ -122,8 +111,8 @@ def generate_harness(client, system_msg, user_msg, filename, target_code):
             max_tokens=MAX_TOKENS,
             temperature=TEMPERATURE,
         )
-        content = resp.choices[0].message.content
-        code = sanitize_response(content)
+        
+        code = sanitize_response(resp.choices[0].message.content)
         
         if not code:
             print(f"  [WARN] Generated code is empty for {filename}")
@@ -148,30 +137,26 @@ def generate_harness(client, system_msg, user_msg, filename, target_code):
 
 def main():
     check_api_key()
-    
     os.makedirs(HARNESS_DIR, exist_ok=True)
-    
     client = OpenAI()
 
-    c_files = sorted(glob.glob(os.path.join(CHALLENGE_DIR, "*.c")))
+    c_files = glob.glob(os.path.join(CHALLENGE_DIR, "*.c"))
     if not c_files:
         print(f"[ERROR] No .c files found in {CHALLENGE_DIR}")
         return
 
+    path = c_files[0]
+    basename = os.path.splitext(os.path.basename(path))[0]
+    print(f"[INFO] Processing {basename} ...")
+    
+    src = read_source(path)
+    if not src:
+        print(f"[WARN] Failed to read source {basename}")
+        return
+    
     system_msg = build_system_prompt()
-
-    for path in c_files:
-        basename = os.path.splitext(os.path.basename(path))[0]
-        print(f"[INFO] Processing {basename} ...")
-        
-        src = read_source(path)
-        if not src:
-            print(f"[WARN] Failed to read {basename}")
-            continue
-        
-        user_msg = build_user_prompt(path, src)
-        
-        generate_harness(client=client, system_msg=system_msg, user_msg=user_msg, filename=basename, target_code=src)
+    user_msg = build_user_prompt(path, src)
+    generate_harness(client, system_msg, user_msg, basename)
 
     print("\n[INFO] All harness generation completed.")
 
