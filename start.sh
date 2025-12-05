@@ -6,6 +6,7 @@ BACKUP_DIR="backup_files"
 HARNESS_DIR="harness"
 OUTPUT_DIR="output"
 FUZZ_DIR="fuzz"
+PATCH_DIR="patch"
 
 SEED_ROOT="seeds"
 SEED_CORPUS="$SEED_ROOT/corpus_seed"
@@ -13,16 +14,13 @@ SEED_BASIC="$SEED_ROOT/basic_seed"
 SEED_CRASH="$SEED_ROOT/crash_seed"
 
 safe_mv() {
-    local src="$1"
-    local dest="$2"
-    if [ -e "$src" ]; then
-        mv "$src" "$dest"
+    if [ -e "$1" ]; then
+        mv "$1" "$2"
     fi
 }
 
-
 # Create output directory
-mkdir -p "$INITIAL_DIR" "$CHALLENGE_DIR" "$BACKUP_DIR" "$HARNESS_DIR" "$OUTPUT_DIR" "$FUZZ_DIR"
+mkdir -p "$INITIAL_DIR" "$CHALLENGE_DIR" "$BACKUP_DIR" "$HARNESS_DIR" "$OUTPUT_DIR" "$FUZZ_DIR" "$PATCH_DIR"
 mkdir -p "$SEED_CORPUS" "$SEED_BASIC" "$SEED_CRASH"
 
 # Clean challenge directory
@@ -49,6 +47,7 @@ for file_path in "$INITIAL_DIR"/*.c; do
     # 1. Create Seed Generator and Libfuzzer harness on LLM
     echo "[*] Running LLM Generator..."
     rm -rf "$SEED_BASIC"/*
+    
     python3 tools/generate_seeds.py
     python3 tools/create_fuzz_harness.py
     
@@ -60,7 +59,8 @@ for file_path in "$INITIAL_DIR"/*.c; do
 
     harness="$HARNESS_DIR/harness_${filename}"
     fuzz="$FUZZ_DIR/fuzz_$target"
-    log_file="$OUTPUT_DIR/${target}.txt"
+    log_file="$OUTPUT_DIR/${target}_result.txt"
+    patch="$PATCH_DIR/patch_$filename"
 
     # 2. Compile clang
     if [ -f "$harness" ]; then
@@ -72,7 +72,10 @@ for file_path in "$INITIAL_DIR"/*.c; do
             echo "[*] Running Fuzzer (Timeout: 90s)..."
             ./"$fuzz" "$SEED_CORPUS" "$SEED_BASIC" \
                 -artifact_prefix="$SEED_CRASH/${target}_" \
-                -max_total_time=90 -fork=3 \
+                -max_total_time=90 \
+                -fork=3 \
+                -timeout=20 \
+                -print_final_stats=1 \
                 > "$log_file" 2>&1
         
             echo "[+] Fuzzing finished for $target."
@@ -85,13 +88,16 @@ for file_path in "$INITIAL_DIR"/*.c; do
 
     echo "[*] Archiving results to $BACKUP_DIR/$target..."
 
+    python3 tools/patch_vuln.py
+
     TARGET_BACKUP="$BACKUP_DIR/$target"
-    mkdir -p "$TARGET_BACKUP"/{harness,fuzz,output,seeds}
+    mkdir -p "$TARGET_BACKUP"/{harness,fuzz,output,seeds,patch}
 
     safe_mv "$CHALLENGE_DIR/$filename" "$TARGET_BACKUP/"
     safe_mv "$harness"                 "$TARGET_BACKUP/harness/"
     safe_mv "$fuzz"                    "$TARGET_BACKUP/fuzz/"
     safe_mv "$log_file"                "$TARGET_BACKUP/output/"
+    safe_mv "$patch"                   "$TARGET_BACKUP/patch/"
     
     for seed_dir in "$SEED_BASIC" "$SEED_CORPUS" "$SEED_CRASH"; do
         if [ "$(ls -A "$seed_dir")" ]; then
