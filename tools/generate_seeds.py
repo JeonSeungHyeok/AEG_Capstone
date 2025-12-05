@@ -2,6 +2,7 @@ import os
 import sys
 import glob
 import codecs
+import re
 from openai import OpenAI
 
 BASE_DIR = os.getcwd()
@@ -28,11 +29,11 @@ def read_source(path):
 
 def build_system_prompt():
     return (
-        "You are an expert fuzzer and vulnerability researcher. "
-        "Analyze the provided C code for security flaws (e.g., buffer overflow, format string, integer overflow, logic bugs). "
-        "Generate a SINGLE raw input string that trigger a crash or hits a vulnerable path. "
-        "If you need non-printable characters, use standard python escape sequences (e.g., \\x00, \\xff, \\n). "
-        "Output ONLY the raw data string. No markdown, no code blocks, no explanations."
+        "You are an expert vulnerability researcher. "
+        "Analyze the C code logic and buffer constraints. "
+        "Generate a SINGLE raw input string (payload) that triggers a segmentation fault or memory corruption. "
+        "Use standard Python escape sequences (e.g., \\x41, \\xff) for non-printable bytes. "
+        "Output ONLY the raw string. Do NOT use markdown, code blocks, or surrounding quotes."
     )
 
 def gen_seeds(client, system_msg, filename, target_code, n):
@@ -47,9 +48,7 @@ def gen_seeds(client, system_msg, filename, target_code, n):
                     {
                         "role": "user", 
                         "content": (
-                            f"Target C Code (FULL SOURCE):\n```c\n{target_code}\n```\n\n"
-                            f"Task: Generate distinctive input #{i+1} to exploit this code. "
-                            "Focus on edge cases tailored to the buffer sizes and logic seen in the code."
+                            f"Code:\n{target_code}\n\nTask: Generate exploit payload #{i+1} to crash this."
                         )
                     }
                 ],
@@ -57,17 +56,9 @@ def gen_seeds(client, system_msg, filename, target_code, n):
                 temperature=TEMPERATURE,
             )
             content = resp.choices[0].message.content
-
             if content:
-                if content.startswith("```"):
-                    lines = content.splitlines()
-                    if len(lines) >= 2:
-                        content = "\n".join(lines[1:-1])
-                    else:
-                        content = content.replace("```", "")
-                
-                content = content.strip()
-                
+                content = re.sub(r"^```[a-zA-Z]*\n", "", content)
+                content = content.replace("```", "").strip()                
                 try:
                     final_data = codecs.decode(content, 'unicode_escape').encode('latin-1')
                 except Exception:
@@ -86,28 +77,26 @@ def gen_seeds(client, system_msg, filename, target_code, n):
             
 def main():
     check_api_key()
-    
     os.makedirs(SEED_DIR, exist_ok=True)
-    
     client = OpenAI()
 
-    c_files = sorted(glob.glob(os.path.join(CHALLENGE_DIR, "*.c")))
+    c_files = glob.glob(os.path.join(CHALLENGE_DIR, "*.c"))
+    
     if not c_files:
         print(f"[ERROR] No .c files found in {CHALLENGE_DIR}")
         return
-
-    for path in c_files:
-        basename = os.path.splitext(os.path.basename(path))[0]
-        print(f"[INFO] Processing {basename} ...")
-        
-        src = read_source(path)
-        
-        if not src:
-            print(f"[WARN] Failed to read {basename}")
-            continue
-        
-        system_msg = build_system_prompt()
-        gen_seeds(client=client, system_msg=system_msg, filename=basename, target_code=src, n=5)
+    
+    path = c_files[0]
+    basename = os.path.splitext(os.path.basename(path))[0]
+    print(f"[INFO] Processing {basename} ...")
+    
+    src = read_source(path)
+    if not src:
+        print(f"[WARN] Failed to read {basename}")
+        return
+    
+    system_msg = build_system_prompt()
+    gen_seeds(client, system_msg, basename, src, n=5)
         
     print("[INFO] All seed generation completed.")
 
