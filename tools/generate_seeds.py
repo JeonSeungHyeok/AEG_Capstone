@@ -7,7 +7,7 @@ from openai import OpenAI
 
 BASE_DIR = os.getcwd()
 CHALLENGE_DIR = os.path.join(BASE_DIR, "challenge")
-SEED_DIR = os.path.join(BASE_DIR, "seeds/basic_seed")
+SEED_DIR = os.path.join(BASE_DIR, "seeds", "basic_seed")
 
 MODEL_NAME = "gpt-4o"
 MAX_TOKENS = 2500
