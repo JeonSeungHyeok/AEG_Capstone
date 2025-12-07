@@ -3,6 +3,8 @@
 set -euo pipefail
 shopt -s nullglob
 
+ARCH_MODE="${1:-}"
+
 INITIAL_DIR="initial_files"
 CHALLENGE_DIR="challenge"
 BACKUP_DIR="backup_files"
@@ -77,7 +79,16 @@ for file_path in "$INITIAL_DIR"/*.c; do
     # # 2. Compile clang & Execute fuzzer
     if [ -f "$harness" ]; then
         echo "[*] Compiling with Clang..."
-        if clang -o "$fuzz" "$harness" -fsanitize=fuzzer,address,undefined -g -m32; then
+
+        if [ "$ARCH_MODE" = "32" ]; then
+            echo "[*] 32-bit mode enabled (-m32)"
+            CLANG_CMD=(clang -o "$fuzz" "$harness" -fsanitize=fuzzer,address,undefined -g -m32)
+        else
+            echo "[*] Default 64-bit mode"
+            CLANG_CMD=(clang -o "$fuzz" "$harness" -fsanitize=fuzzer,address,undefined -g)
+        fi
+
+        if "${CLANG_CMD[@]}"; then
             echo "=========================================="
             echo "[*] Running Fuzzer (Timeout: 90s)..."
             set +e

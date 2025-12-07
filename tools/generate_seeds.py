@@ -9,7 +9,7 @@ BASE_DIR = os.getcwd()
 CHALLENGE_DIR = os.path.join(BASE_DIR, "challenge", sys.argv[1])
 SEED_DIR = os.path.join(CHALLENGE_DIR, "seeds", "basic_seed")
 
-MODEL_NAME = "gpt-4o"
+MODEL_NAME = "gpt-4.1"
 MAX_TOKENS = 2500
 TEMPERATURE = 1.0
 
