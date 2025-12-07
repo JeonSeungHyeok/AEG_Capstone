@@ -132,14 +132,15 @@ def main():
         return
     
     log_path = os.path.join(OUTPUT_DIR, f"{filename_no_ext}_result.txt")
-
     log_content = read_source(log_path)
     
     if not log_content:
         print(f"  [SKIP] No valid ASan crash log found for {basename}. Skipping patch.")
+        return
     
     if not "ERROR: AddressSanitizer" in log_content:
         print(f"  [SKIP] Log file exists but contains no ASan crash report.")
+        return
             
     system_msg = build_system_prompt()
     user_msg = build_user_prompt(basename, src, log_content)
