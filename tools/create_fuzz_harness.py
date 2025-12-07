@@ -6,8 +6,8 @@ import re
 from openai import OpenAI
 
 BASE_DIR = os.getcwd()
-CHALLENGE_DIR = os.path.join(BASE_DIR, "challenge")
-HARNESS_DIR = os.path.join(BASE_DIR, "harness")
+CHALLENGE_DIR = os.path.join(BASE_DIR, "challenge", sys.argv[1])
+HARNESS_DIR = os.path.join(CHALLENGE_DIR, "harness")
 
 MODEL_NAME = "gpt-4o"
 MAX_TOKENS = 2500
@@ -65,9 +65,13 @@ def build_system_prompt():
         
         INSTRUCTIONS:
         1. Analyze 'Target Source Code' (w/ line numbers).
-        2. Extract ONLY the vulnerable function (e.g., strcpy, buffer overflow) and dependencies.
-        3. **CRITICAL**: Prepend `#line <orig_line> \"<orig_filename>\"` to the extracted function.
-        5. Implement `LLVMFuzzerTestOneInput` to call it.
+        2. Extract ONLY the vulnerable function and its minimal dependencies (structs, globals).
+        3. Prepend `#line <orig_line> "<orig_filename>"` to the extracted function.
+        4. Implement `LLVMFuzzerTestOneInput` that:
+            - Converts `const uint8_t *Data, size_ta Size` into suitable arguments.
+            - Calls ONLY the extracted vulnerable function.
+            - MUST NOT call `system`, `strcpy`, `gets`, etc. directly.
+        5. DO NOT define `main`. DO NOT add unrelated logic.
         
         EXAMPLE:
         [INPUT]
