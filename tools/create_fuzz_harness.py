@@ -9,8 +9,8 @@ BASE_DIR = os.getcwd()
 CHALLENGE_DIR = os.path.join(BASE_DIR, "challenge", sys.argv[1])
 HARNESS_DIR = os.path.join(CHALLENGE_DIR, "harness")
 
-MODEL_NAME = "gpt-4o"
-MAX_TOKENS = 2500
+MODEL_NAME = "gpt-4.1"
+MAX_TOKENS = 1200
 TEMPERATURE = 0.0
 
 FIXED_HEADER ="""// clang -o harness harness.c -fsanitize=fuzzer,address -g
@@ -68,7 +68,7 @@ def build_system_prompt():
         2. Extract ONLY the vulnerable function and its minimal dependencies (structs, globals).
         3. Prepend `#line <orig_line> "<orig_filename>"` to the extracted function.
         4. Implement `LLVMFuzzerTestOneInput` that:
-            - Converts `const uint8_t *Data, size_ta Size` into suitable arguments.
+            - Converts `const uint8_t *Data, size_t Size` into suitable arguments.
             - Calls ONLY the extracted vulnerable function.
             - MUST NOT call `system`, `strcpy`, `gets`, etc. directly.
         5. DO NOT define `main`. DO NOT add unrelated logic.
@@ -106,17 +106,17 @@ def build_user_prompt(filename, source_text):
 def generate_harness(client, system_msg, user_msg, filename):
     print(f"  > Generating harness for '{filename}'...")
     try:
-        resp = client.chat.completions.create(
+        resp = client.responses.create(
             model=MODEL_NAME,
-            messages=[
+            input=[
                 {"role": "system", "content": system_msg},
                 {"role": "user", "content": user_msg},
             ],
-            max_tokens=MAX_TOKENS,
+            max_output_tokens=MAX_TOKENS,
             temperature=TEMPERATURE,
         )
         
-        code = sanitize_response(resp.choices[0].message.content)
+        code = sanitize_response(resp.output_text)
         
         if not code:
             print(f"  [WARN] Generated code is empty for {filename}")
@@ -132,7 +132,7 @@ def generate_harness(client, system_msg, user_msg, filename):
         print(f"  [OK] Saved harness: {out_fname}")
 
         if "LLVMFuzzerTestOneInput" not in code:
-            print(f"  [WARN] {filename}: Missing 'LLVMFuzzerTestOneInput' entry point.")
+            print(f"  [ERROR] Invalid harness generated for {filename}")
         if "#line" not in code:
             print(f"  [WARN] {filename}: LLM did not generate #line directives.")
 
@@ -144,12 +144,11 @@ def main():
     os.makedirs(HARNESS_DIR, exist_ok=True)
     client = OpenAI()
 
-    c_files = glob.glob(os.path.join(CHALLENGE_DIR, "*.c"))
-    if not c_files:
+    path = os.path.join(CHALLENGE_DIR, f"{sys.argv[1]}.c")
+    if not path:
         print(f"[ERROR] No .c files found in {CHALLENGE_DIR}")
         return
 
-    path = c_files[0]
     basename = os.path.splitext(os.path.basename(path))[0]
     print(f"[INFO] Processing {basename} ...")
     
